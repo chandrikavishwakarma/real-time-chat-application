@@ -1,0 +1,27 @@
+{
+  "name": "real-time-chat-application",
+  "version": "1.0.0",
+  "description": "A browser-based, one-to-one chat application for registering users, finding other accounts, loading saved conversations, and exchanging messages in real time. The frontend is built with React and Vite; the backend is an Express API and Socket.IO server. **The active database layer is PostgreSQL accessed through Prisma ORM, replacing the former MongoDB/Mongoose implementation.**",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev:server": "cd backend && npm run dev",
+    "dev:client": "cd frontend && npm run dev",
+    "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\""
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/chandrikavishwakarma/real-time-chat-application.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/chandrikavishwakarma/real-time-chat-application/issues"
+  },
+  "homepage": "https://github.com/chandrikavishwakarma/real-time-chat-application#readme",
+  "devDependencies": {
+    "concurrently": "^10.0.6"
+  }
+}

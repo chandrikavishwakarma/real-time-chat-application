@@ -51,11 +51,13 @@ exports.getChatUsers = async (req, res) => {
   }
 };
 
+
 exports.getMessages = async (req, res) => {
   try {
     const currentUserId = Number(req.user.id);
     const otherUserId = Number(req.params.userId);
 
+    // Validate user IDs
     if (
       !Number.isSafeInteger(currentUserId) ||
       currentUserId <= 0 ||
@@ -67,15 +69,21 @@ exports.getMessages = async (req, res) => {
       });
     }
 
+    // Prevent chatting with yourself
     if (currentUserId === otherUserId) {
       return res.status(400).json({
         message: "You cannot open a chat with yourself",
       });
     }
 
+    // Check whether the other user exists
     const otherUser = await prisma.user.findUnique({
-      where: { id: otherUserId },
-      select: { id: true },
+      where: {
+        id: otherUserId,
+      },
+      select: {
+        id: true,
+      },
     });
 
     if (!otherUser) {
@@ -84,6 +92,13 @@ exports.getMessages = async (req, res) => {
       });
     }
 
+    console.log(
+      "Fetching messages between users:",
+      currentUserId,
+      otherUserId
+    );
+
+    // Fetch messages in both directions
     const messages = await prisma.message.findMany({
       where: {
         OR: [
@@ -97,10 +112,19 @@ exports.getMessages = async (req, res) => {
           },
         ],
       },
+      select: {
+        id: true,
+        senderId: true,
+        receiverId: true,
+        text: true,
+        createdAt: true,
+      },
       orderBy: {
         createdAt: "asc",
       },
     });
+
+    console.log("Messages retrieved successfully:", messages);
 
     return res.status(200).json(messages);
   } catch (error) {

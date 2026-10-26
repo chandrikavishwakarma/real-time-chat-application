@@ -1,4 +1,3 @@
-
 const { PrismaClient } = require("@prisma/client");
 
 const prisma = new PrismaClient();
@@ -6,10 +5,10 @@ const prisma = new PrismaClient();
 const dbConnect = async () => {
   try {
     await prisma.$connect();
-    console.log("Connected to PostgreSQL successfully");
+    console.log("Connected to PostgreSQL successfully on port 5432");
   } catch (error) {
     console.error("PostgreSQL connection error:", error);
-    throw error;
+    process.exit(1);
   }
 };
 
