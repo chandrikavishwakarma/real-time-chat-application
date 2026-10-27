@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { io } from "socket.io-client";
 import { useNavigate, useParams } from "react-router-dom";
-
+import {Plus,Paperclip } from "lucide-react"
 const API = import.meta.env.VITE_API_URL || "http://localhost:5000";
 
 export default function Chat() {
@@ -15,7 +15,7 @@ export default function Chat() {
   const [status, setStatus] = useState("Connecting...");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-
+  const [upload, setUpload] = useState(null)
   const socketRef = useRef(null);
   const selectedRef = useRef(userId);
   const meRef = useRef(null);
@@ -434,6 +434,9 @@ export default function Chat() {
             className="mx-auto flex max-w-4xl items-end gap-2 sm:gap-3"
           >
             <div className="flex min-w-0 flex-1 items-center rounded-2xl border border-gray-200 bg-gray-50 px-4 transition focus-within:border-lime-500 focus-within:bg-white focus-within:ring-4 focus-within:ring-lime-100">
+              <button type="button" className="p-2 rounded-full hover:bg-gray-100 hover:cursor-pointer" onClick={() => document.getElementById('fileInput').click()}>
+                <Plus size='24'/>
+              </button>
               <input
                 value={text}
                 onChange={(event) => setText(event.target.value)}
