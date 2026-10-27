@@ -1,6 +1,5 @@
 const { prisma } = require("../config/db.js");
-
-exports.getChatUsers = async (req, res) => {
+const getChatUsers = async (req, res) => {
   try {
     const currentUserId = Number(req.user.id);
 
@@ -51,8 +50,7 @@ exports.getChatUsers = async (req, res) => {
   }
 };
 
-
-exports.getMessages = async (req, res) => {
+const getMessages = async (req, res) => {
   try {
     const currentUserId = Number(req.user.id);
     const otherUserId = Number(req.params.userId);
@@ -92,11 +90,11 @@ exports.getMessages = async (req, res) => {
       });
     }
 
-    console.log(
-      "Fetching messages between users:",
-      currentUserId,
-      otherUserId
-    );
+    // console.log(
+    //   "Fetching messages between users:",
+    //   currentUserId,
+    //   otherUserId
+    // );
 
     // Fetch messages in both directions
     const messages = await prisma.message.findMany({
@@ -124,7 +122,7 @@ exports.getMessages = async (req, res) => {
       },
     });
 
-    console.log("Messages retrieved successfully:", messages);
+    // console.log("Messages retrieved successfully:", messages);
 
     return res.status(200).json(messages);
   } catch (error) {
@@ -134,4 +132,81 @@ exports.getMessages = async (req, res) => {
       message: "Failed to load messages",
     });
   }
+};
+
+const uploadFile = async (req, res) => {
+  try {
+    const currentUserId = Number(req.user.id);
+    const otherUserId = Number(req.params.userId);
+    const file = req.file;
+    if (
+      !Number.isSafeInteger(currentUserId) ||
+      currentUserId <= 0 ||
+      !Number.isSafeInteger(otherUserId) ||
+      otherUserId <= 0
+    ) {
+      return res.status(400).json({ message: "Invalid User ID" });
+    }
+    if (currentUserId === otherUserId) {
+      return res
+        .status(400)
+        .json({ message: "You cannot send file to yourself!" });
+    }
+
+    if (!file) {
+      return res.status(400).json({ message: "file not uploaded!" });
+    }
+    const receiver = await prisma.user.findUnique({
+      where: { id: otherUserId },
+      select: { id: true },
+    });
+    if (!receiver) {
+      console.log("receiver has not found!");
+      return res.status(400).json({ message: "reciever not found!" });
+    }
+    const message = await prisma.message.create({
+      data: {
+        sender: {
+          connect: { id: currentUserId },
+        },
+        receiver: {
+          connect: { id: otherUserId },
+        },
+        text: req.body.text || null,
+        fileName: file.originalname,
+        fileUrl: `/uploads/${file.filename}`,
+        fileType: file.mimetype,
+        fileSize: file.size,
+      },
+      select: {
+        id: true,
+        senderId: true,
+        receiverId: true,
+        text: true,
+        fileName: true,
+        fileUrl: true,
+        fileType: true,
+        fileSize: true,
+        createdAt: true,
+      },
+    });
+    const io = req.app.get("io");
+    if (io) {
+      io.to(`user:${currentUserId}`)
+        .to(`user:${otherUserId}`)
+        .emit("new_message", message);
+    }
+    return res.status(201).json({ message: "file uploaded!", file: message });
+  } catch (err) {
+    console.error("upload file error:", err);
+    return res.status(500).json({
+      message: "failed to upload the file!",
+      error: err.message,
+    });
+  }
+};
+module.exports = {
+  getChatUsers,
+  getMessages,
+  uploadFile,
 };

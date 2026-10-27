@@ -23,6 +23,12 @@ model Message {
   senderId   Int
   receiverId Int
   text       String   @db.VarChar(5000)
+
+  fileName   String?
+  fileUrl    String?
+  fileType   String?
+  fileSize   Int?
+
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 

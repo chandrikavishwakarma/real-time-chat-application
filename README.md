@@ -12,8 +12,42 @@ A browser-based, one-to-one chat application for registering users, finding othe
 - Persist messages in PostgreSQL and identify each message's sender and receiver.
 - Validate message recipients and trimmed message text; messages must be 1–5,000 characters and cannot be sent to oneself.
 - Show the Socket.IO connection state in the chat view.
+- Upload file attachments through an authenticated backend API; frontend attachment integration is still pending.
 
-Group conversations, read receipts, typing indicators, live presence tracking, message deletion/editing, and file sharing are **not implemented**.
+Group conversations, read receipts, typing indicators, live presence tracking, and message deletion/editing are **not implemented**. File uploads are implemented in the backend; sending and displaying attachments from the React frontend remains a next step.
+
+## Current Development Progress
+
+### Backend and Database
+
+- The backend is developed with Node.js and Express.js.
+- PostgreSQL is configured as the database, with Prisma ORM used for database operations.
+- Registration and login APIs hash passwords with bcrypt and use JWT-based authentication.
+- Authenticated chat APIs return registered users and retrieve messages for a conversation.
+- Socket.IO supports real-time text messaging between connected users.
+- Backend database connectivity and server startup are configured; the server connects to PostgreSQL before it begins listening.
+
+### File Upload Feature
+
+- A backend API is implemented to send a file to another registered user.
+- Multer handles `multipart/form-data` uploads, and uploaded files are stored in the backend `uploads` directory.
+- The upload handler uses Prisma to save the original filename, file URL/path, MIME type, and file size in PostgreSQL.
+- File messages are associated with their sender and receiver through the message's database relations.
+- The upload route requires authentication and checks that the receiver exists.
+- When a file message is created, Socket.IO emits `new_message` to the sender's and receiver's user rooms.
+- The current upload route is `POST /api/chat/:userId/upload`; the uploaded file must use the multipart field name `file`. Files are served under the `/uploads` static route.
+
+### Current Status
+
+Backend integration with PostgreSQL and Prisma is configured, and the file upload backend implementation is in place. File upload behavior and database persistence still need thorough testing; the frontend does not yet provide file-upload or attachment-display functionality.
+
+### Next Steps
+
+- Test file uploads and database persistence thoroughly.
+- Verify uploaded file access through the backend static file route.
+- Integrate file upload functionality into the React frontend.
+- Display file attachments in chat conversations.
+- Test real-time delivery of text and file messages between users.
 
 ## Technology Stack
 
@@ -40,9 +74,11 @@ The backend package still lists `mongoose`, and `backend/src/model/` contains Mo
 │   │   ├── schema.prisma            # PostgreSQL User and Message models
 │   │   └── migrations/
 │   │       ├── migration_lock.toml
-│   │       └── 20261023095501_init/
-│   │           └── migration.sql    # Initial PostgreSQL schema migration
-│   └── src/
+│   │       ├── 20261023095501_init/
+│   │       │   └── migration.sql    # Initial PostgreSQL schema migration
+│   │       └── 20261026122220_file_upload/
+│   │           └── migration.sql    # File metadata columns for messages
+│   ├── src/
 │       ├── app.js                   # Express middleware and API route mounting
 │       ├── config/
 │       │   └── db.js                # Prisma Client and PostgreSQL connection
@@ -51,16 +87,18 @@ The backend package still lists `mongoose`, and `backend/src/model/` contains Mo
 │       │   ├── chatController.js   # Conversation users and message history
 │       │   └── userController.js   # Public user-list endpoint
 │       ├── middleware/
-│       │   └── authMiddleware.js   # JWT authentication for protected HTTP routes
+│       │   ├── authMiddleware.js   # JWT authentication for protected HTTP routes
+│       │   └── uploadMiddleware.js # Multer disk storage for uploaded files
 │       ├── model/
 │       │   ├── Message.js          # Legacy Mongoose model; not used by current chat flow
 │       │   └── User.js             # Legacy Mongoose model; not used by current chat flow
 │       ├── route/
 │       │   ├── authRoute.js
-│       │   ├── chatRoutes.js
+│       │   ├── chatRoutes.js       # Chat APIs, including file uploads
 │       │   └── userRoutes.js
 │       └── socket/
 │           └── chatSocket.js       # Socket authentication, user rooms, and message handling
+│   └── uploads/                    # Files uploaded through the backend API
 └── frontend/
     ├── package.json                 # Frontend dependencies and Vite scripts
     ├── vite.config.js               # React and Tailwind Vite plugins
@@ -97,12 +135,16 @@ The Prisma schema is in `backend/prisma/schema.prisma`. It uses the PostgreSQL p
 | `senderId` | `Int` | Foreign key to `User.id` for the sender |
 | `receiverId` | `Int` | Foreign key to `User.id` for the recipient |
 | `text` | `String` | Required message text, limited to 5,000 characters |
+| `fileName` | `String?` | Original filename for an attachment, when present |
+| `fileUrl` | `String?` | Backend path used to access an uploaded attachment |
+| `fileType` | `String?` | Attachment MIME type, when present |
+| `fileSize` | `Int?` | Attachment size in bytes, when present |
 | `createdAt` | `DateTime` | Defaults to the time the message is created |
 | `updatedAt` | `DateTime` | Maintained by Prisma on updates |
 
 Each message has two separate relations to `User`: `sender` (`SentMessages`) and `receiver` (`ReceivedMessages`). Both foreign keys reference `User.id` and cascade on user deletion. A user can therefore have sent and received messages. The database tables are named `"User"` and `"Message"` (case-sensitive when quoted in PostgreSQL).
 
-The schema defines a unique index on `User.Email` and a composite index on `Message(senderId, receiverId, createdAt)`. The initial migration creates those indexes and the two message foreign-key constraints.
+The schema defines a unique index on `User.Email` and a composite index on `Message(senderId, receiverId, createdAt)`. The initial migration creates those indexes and the two message foreign-key constraints; the file-upload migration adds the attachment metadata columns.
 
 ## Application Workflow
 
@@ -121,6 +163,8 @@ REST authorization verifies the Bearer JWT but does not look up the user on ever
 ## HTTP API
 
 The Express application mounts routes under `/api/auth`, `/api/users`, and `/api/chat`.
+
+The authenticated file upload endpoint is `POST /api/chat/:userId/upload`. Send the file as multipart field `file`. Uploaded files are served from the backend's `/uploads` static route. The upload handler creates a related message record and emits `new_message` to both participants' user rooms. The frontend does not yet include file-upload controls or attachment rendering.
 
 | Method | Endpoint | Authentication | Purpose |
 | --- | --- | --- | --- |
@@ -372,9 +416,10 @@ The backend package does not define a test or lint script.
 
 ## Future Improvements
 
-The following are potential future enhancements and are not implemented in the current application:
+The following are potential future enhancements or remaining work:
 
 - Group conversations, typing indicators, read receipts, and reliable online/presence tracking.
-- File sharing and message editing or deletion.
+- React frontend file-upload controls and attachment display in conversations; thoroughly test upload delivery and database persistence.
+- Message editing or deletion.
 - Backend automated tests for authentication, REST endpoints, socket validation, and persistence.
 - Use `VITE_API_URL` consistently in the login and registration pages and configure the Socket.IO origin for different environments.

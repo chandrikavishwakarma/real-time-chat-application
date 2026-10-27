@@ -20,7 +20,7 @@ const Login = () => {
         },
       );
 
-      console.log(response.data);
+      // console.log(response.data);
       alert("Login successful!");
       localStorage.setItem("token", response.data.token);
       navigate("/");
