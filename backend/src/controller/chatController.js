@@ -116,6 +116,10 @@ const getMessages = async (req, res) => {
         senderId: true,
         receiverId: true,
         text: true,
+        fileName: true,
+        fileType: true,
+        fileUrl: true,
+        fileSize: true,
         createdAt: true,
       },
       orderBy: {
@@ -169,6 +173,10 @@ const uploadFile = async (req, res) => {
     if(req.file){
       uploadedFile = await uploadCloudinaryFile(req.file)
     }
+    // console.log(uploadFile)
+    console.log("Request body:", req.body);
+console.log("Message text:", req.body?.text);
+console.log("Uploaded file:", uploadedFile);
     const message = await prisma.message.create({
       data: {
         sender: {
@@ -177,12 +185,12 @@ const uploadFile = async (req, res) => {
         receiver: {
           connect: { id: otherUserId },
         },
-        text: req.body.text || null,
-        fileName: uploadedFile.originalname,
-        fileUrl: `/uploads/${uploadedFile.secure_url}`,
-        fileType: uploadedFile.mimetype,
-        fileSize: uploadedFile.size,
-        publicId: uploadedFile.publicId
+        text:  req.body?.text?.trim() || "",
+        fileName: file.originalname,
+        fileUrl:  uploadedFile.secure_url,
+        fileType: file.mimetype,
+        fileSize: file.size,
+        publicId: uploadedFile.public_id
       },
       select: {
         id: true,

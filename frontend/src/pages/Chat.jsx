@@ -1,8 +1,48 @@
 import { useEffect, useRef, useState } from "react";
 import { io } from "socket.io-client";
 import { useNavigate, useParams } from "react-router-dom";
-import {Plus,Paperclip } from "lucide-react"
+import { Plus, Paperclip, X, FileText } from "lucide-react";
+
 const API = import.meta.env.VITE_API_URL || "http://localhost:5000";
+
+function getId(user) {
+  if (!user) return null;
+  return user.id ?? user._id ?? user.userId ?? null;
+}
+
+function getSenderId(message) {
+  return (
+    message.senderId ??
+    message.sender?.id ??
+    message.sender?._id ??
+    message.sender
+  );
+}
+
+function getReceiverId(message) {
+  return (
+    message.receiverId ??
+    message.receiver?.id ??
+    message.receiver?._id ??
+    message.receiver
+  );
+}
+
+function getMessageId(message) {
+  return message.id ?? message._id;
+}
+
+function formatFileSize(bytes = 0) {
+  if (!bytes) return "0 Bytes";
+
+  const units = ["Bytes", "KB", "MB", "GB"];
+  const index = Math.min(
+    Math.floor(Math.log(bytes) / Math.log(1024)),
+    units.length - 1,
+  );
+
+  return `${(bytes / 1024 ** index).toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
+}
 
 export default function Chat() {
   const { userId } = useParams();
@@ -12,23 +52,42 @@ export default function Chat() {
   const [selected, setSelected] = useState(null);
   const [messages, setMessages] = useState([]);
   const [text, setText] = useState("");
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [filePreview, setFilePreview] = useState("");
   const [status, setStatus] = useState("Connecting...");
   const [loading, setLoading] = useState(true);
+  const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
-  const [upload, setUpload] = useState(null)
+
   const socketRef = useRef(null);
   const selectedRef = useRef(userId);
   const meRef = useRef(null);
   const bottomRef = useRef(null);
+  const fileInputRef = useRef(null);
 
+  // Keep the currently selected user available to Socket.IO callbacks.
   useEffect(() => {
     selectedRef.current = userId;
   }, [userId]);
 
   useEffect(() => {
-    meRef.current = me?._id;
+    meRef.current = getId(me);
   }, [me]);
 
+  // Create a local preview only. This does NOT upload the file.
+  useEffect(() => {
+    if (!selectedFile || !selectedFile.type.startsWith("image/")) {
+      setFilePreview("");
+      return;
+    }
+
+    const previewUrl = URL.createObjectURL(selectedFile);
+    setFilePreview(previewUrl);
+
+    return () => URL.revokeObjectURL(previewUrl);
+  }, [selectedFile]);
+
+  // Load the logged-in user, selected user, and conversation history.
   useEffect(() => {
     let active = true;
     const token = localStorage.getItem("token");
@@ -43,6 +102,8 @@ export default function Chat() {
       setError("");
       setSelected(null);
       setMessages([]);
+      setSelectedFile(null);
+      setText("");
 
       try {
         const headers = {
@@ -74,7 +135,7 @@ export default function Chat() {
         const currentUser = usersData.me;
 
         const otherUser = (usersData.users || []).find(
-          (user) => String(user._id) === String(userId),
+          (user) => String(getId(user)) === String(userId),
         );
 
         if (!currentUser) {
@@ -89,7 +150,12 @@ export default function Chat() {
 
         setMe(currentUser);
         setSelected(otherUser);
-        setMessages(Array.isArray(messagesData) ? messagesData : []);
+
+        const loadedMessages = Array.isArray(messagesData)
+          ? messagesData
+          : messagesData.messages || [];
+
+        setMessages(loadedMessages);
       } catch (err) {
         if (active) {
           setError(err.message || "Chat could not be loaded.");
@@ -106,6 +172,7 @@ export default function Chat() {
     };
   }, [userId, navigate]);
 
+  // Connect Socket.IO and receive real-time messages.
   useEffect(() => {
     const token = localStorage.getItem("token");
 
@@ -118,8 +185,13 @@ export default function Chat() {
 
     socketRef.current = socket;
 
-    socket.on("connect", () => setStatus("Connected"));
-    socket.on("disconnect", () => setStatus("Disconnected"));
+    socket.on("connect", () => {
+      setStatus("Connected");
+    });
+
+    socket.on("disconnect", () => {
+      setStatus("Disconnected");
+    });
 
     socket.on("connect_error", (err) => {
       setStatus("Connection failed");
@@ -130,18 +202,27 @@ export default function Chat() {
       const myId = meRef.current;
       const activeUserId = selectedRef.current;
 
+      const senderId = getSenderId(message);
+      const receiverId = getReceiverId(message);
+
       const belongsToOpenChat =
-        (String(message.sender) === String(myId) &&
-          String(message.receiver) === String(activeUserId)) ||
-        (String(message.receiver) === String(myId) &&
-          String(message.sender) === String(activeUserId));
+        (String(senderId) === String(myId) &&
+          String(receiverId) === String(activeUserId)) ||
+        (String(receiverId) === String(myId) &&
+          String(senderId) === String(activeUserId));
 
       if (belongsToOpenChat) {
-        setMessages((previous) =>
-          previous.some((item) => String(item._id) === String(message._id))
-            ? previous
-            : [...previous, message],
-        );
+        setMessages((previous) => {
+          const incomingId = getMessageId(message);
+
+          const alreadyExists =
+            incomingId != null &&
+            previous.some(
+              (item) => String(getMessageId(item)) === String(incomingId),
+            );
+
+          return alreadyExists ? previous : [...previous, message];
+        });
       }
     });
 
@@ -151,56 +232,198 @@ export default function Chat() {
     };
   }, []);
 
+  // Automatically scroll to the latest message.
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  function sendMessage(event) {
-    event.preventDefault();
+  // Select an attachment locally; do not upload it yet.
+  function handleFileChange(event) {
+    const file = event.target.files?.[0];
 
-    const messageText = text.trim();
+    if (!file) return;
+
+    // Keep this limit consistent with the backend Multer limit.
+    if (file.size > 10 * 1024 * 1024) {
+      setError("File size must not exceed 10 MB.");
+      event.target.value = "";
+      return;
+    }
+
+    setError("");
+    setSelectedFile(file);
+  }
+
+  function removeAttachment() {
+    setSelectedFile(null);
+
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+  }
+
+  // Send text only through Socket.IO.
+  function sendTextMessage(messageText) {
     const socket = socketRef.current;
 
-    if (!messageText || !selected || !socket?.connected) return;
+    if (!socket?.connected) {
+      setError("Socket is disconnected. Please wait and try again.");
+      return;
+    }
 
+    setSending(true);
     setError("");
 
     socket.emit(
       "send_message",
       {
-        receiverId: selected._id,
+        receiverId: getId(selected),
         text: messageText,
       },
       (result) => {
+        setSending(false);
+
         if (!result?.success) {
-          setError(result?.message || "Message could not be sent");
+          setError(result?.message || "Message could not be sent.");
           return;
         }
 
-        setMessages((previous) =>
-          previous.some(
-            (item) => String(item._id) === String(result.message._id),
-          )
-            ? previous
-            : [...previous, result.message],
-        );
+        const savedMessage = result.message;
+
+        setMessages((previous) => {
+          const savedId = getMessageId(savedMessage);
+
+          if (
+            savedId != null &&
+            previous.some(
+              (item) => String(getMessageId(item)) === String(savedId),
+            )
+          ) {
+            return previous;
+          }
+
+          return [...previous, savedMessage];
+        });
+
+        setText("");
       },
     );
-
-    setText("");
   }
+
+  // If a file is attached, upload it only after Send is clicked.
+  async function sendMessage(event) {
+    event.preventDefault();
+
+    const messageText = text.trim();
+
+    if (!selected || (!messageText && !selectedFile) || sending) {
+      return;
+    }
+
+    setError("");
+
+    // Text-only messages keep using the existing Socket.IO flow.
+    if (!selectedFile) {
+      sendTextMessage(messageText);
+      return;
+    }
+
+    const token = localStorage.getItem("token");
+
+    if (!token) {
+      navigate("/login");
+      return;
+    }
+
+    setSending(true);
+
+    try {
+      const formData = new FormData();
+
+      formData.append("file", selectedFile);
+      formData.append("text", messageText);
+
+      const response = await fetch(
+        `${API}/api/chat/${getId(selected)}/upload`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+          body: formData,
+        },
+      );
+
+      const data = await response.json();
+
+      if (response.status === 401) {
+        localStorage.removeItem("token");
+        navigate("/login");
+        return;
+      }
+
+      if (!response.ok) {
+        throw new Error(data.message || "File could not be sent.");
+      }
+
+      // Backend currently returns { message: "...", file: savedMessage }.
+      const savedMessage =
+        data.file ||
+        data.savedMessage ||
+        (typeof data.message === "object" ? data.message : null);
+
+      if (!savedMessage) {
+        throw new Error(
+          "Upload succeeded, but the saved message was missing from the response.",
+        );
+      }
+
+      // Add immediately; the Socket.IO duplicate is ignored by ID.
+      setMessages((previous) => {
+        const savedId = getMessageId(savedMessage);
+
+        if (
+          savedId != null &&
+          previous.some(
+            (item) => String(getMessageId(item)) === String(savedId),
+          )
+        ) {
+          return previous;
+        }
+
+        return [...previous, savedMessage];
+      });
+
+      setText("");
+      setSelectedFile(null);
+
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
+    } catch (err) {
+      setError(err.message || "Failed to send attachment.");
+    } finally {
+      setSending(false);
+    }
+  }
+
+  const canSend =
+    Boolean(text.trim() || selectedFile) &&
+    Boolean(selected) &&
+    !loading &&
+    !sending &&
+    (Boolean(selectedFile) || status === "Connected");
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-lime-50 via-white to-emerald-50 p-0 sm:p-5 lg:p-8">
       <div className="mx-auto flex h-[100dvh] max-w-5xl flex-col overflow-hidden bg-white shadow-xl shadow-lime-900/5 sm:h-[calc(100dvh-2.5rem)] sm:rounded-3xl sm:border sm:border-lime-100 lg:h-[calc(100dvh-4rem)]">
         {/* Chat Header */}
         <header className="flex shrink-0 items-center gap-3 border-b border-lime-100 bg-white px-4 py-3 sm:px-6 sm:py-4">
-          {/* Back Button */}
           <button
             type="button"
             onClick={() => navigate("/")}
             aria-label="Back to users"
-            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-gray-200 text-gray-600 transition hover:border-lime-200 hover:bg-lime-50 hover:text-lime-700 cursor-pointer"
+            className="flex h-10 w-10 shrink-0 cursor-pointer items-center justify-center rounded-xl border border-gray-200 text-gray-600 transition hover:border-lime-200 hover:bg-lime-50 hover:text-lime-700"
           >
             <svg
               xmlns="http://www.w3.org/2000/svg"
@@ -218,12 +441,10 @@ export default function Chat() {
             </svg>
           </button>
 
-          {/* Selected User Avatar */}
           <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-lime-200 to-emerald-200 text-lg font-extrabold text-lime-800">
             {(selected?.Fullname || "U").charAt(0).toUpperCase()}
           </div>
 
-          {/* User Information */}
           <div className="min-w-0 flex-1">
             <h1 className="truncate font-bold text-gray-800 sm:text-lg">
               {selected?.Fullname || "Loading chat..."}
@@ -275,9 +496,8 @@ export default function Chat() {
           </div>
         </header>
 
-        {/* Chat Messages Area */}
+        {/* Chat Messages */}
         <main className="flex-1 space-y-5 overflow-y-auto bg-[#f7faf5] p-4 sm:p-6 lg:p-8">
-          {/* Chat Intro */}
           {!loading && !error && selected && (
             <div className="flex justify-center">
               <div className="rounded-full border border-lime-100 bg-white px-4 py-2 text-center text-xs text-gray-500 shadow-sm">
@@ -289,51 +509,34 @@ export default function Chat() {
             </div>
           )}
 
-          {/* Loading */}
           {loading && (
             <div className="flex h-full min-h-48 flex-col items-center justify-center">
               <div className="h-10 w-10 animate-spin rounded-full border-4 border-lime-100 border-t-lime-600" />
-
               <p className="mt-4 text-sm font-medium text-gray-600">
                 Loading conversation...
               </p>
-
               <p className="mt-1 text-xs text-gray-400">
                 Getting your messages ready
               </p>
             </div>
           )}
 
-          {/* Error */}
           {!loading && error && (
             <div className="mx-auto mt-6 max-w-md rounded-2xl border border-red-100 bg-white p-5 text-center shadow-sm">
-              <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-red-50 text-red-500">
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  width="25"
-                  height="25"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <circle cx="12" cy="12" r="10" />
-                  <path d="M12 8v4" />
-                  <path d="M12 16h.01" />
-                </svg>
-              </div>
-
-              <p className="mt-3 text-sm font-semibold text-red-700">
+              <p className="text-sm font-semibold text-red-700">
                 Something went wrong
               </p>
-
               <p className="mt-1 break-words text-sm text-gray-600">{error}</p>
+              <button
+                type="button"
+                onClick={() => setError("")}
+                className="mt-3 text-xs font-semibold text-lime-700 hover:underline"
+              >
+                Dismiss
+              </button>
             </div>
           )}
 
-          {/* Empty Conversation */}
           {!loading && !error && messages.length === 0 && (
             <div className="flex min-h-64 flex-col items-center justify-center py-10 text-center">
               <div className="flex h-20 w-20 items-center justify-center rounded-3xl bg-gradient-to-br from-lime-100 to-emerald-100 text-lime-700">
@@ -355,40 +558,36 @@ export default function Chat() {
               <h2 className="mt-5 text-lg font-bold text-gray-800">
                 Start a conversation
               </h2>
-
               <p className="mt-2 max-w-xs text-sm leading-6 text-gray-500">
                 Say hello to {selected?.Fullname || "your friend"}. Your
                 messages will appear here.
               </p>
-
               <span className="mt-4 rounded-full bg-lime-100 px-4 py-2 text-xs font-semibold text-lime-800">
                 Your chat starts here 💚
               </span>
             </div>
           )}
 
-          {/* Messages */}
           {!loading &&
             messages.map((message) => {
-              const senderId = message.sender ?? message.senderId;
+              const mine = String(getSenderId(message)) === String(getId(me));
 
-              const mine = String(senderId) === String(me?._id);
+              const messageId = getMessageId(message);
+              const imageFile = message.fileType?.startsWith("image/");
 
               return (
                 <div
-                  key={message._id ?? message.id}
+                  key={messageId}
                   className={`flex items-end gap-2 ${
                     mine ? "justify-end" : "justify-start"
                   }`}
                 >
-                  {/* Receiver Avatar */}
                   {!mine && (
                     <div className="mb-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-lime-100 text-xs font-bold text-lime-800">
                       {(selected?.Fullname || "U").charAt(0).toUpperCase()}
                     </div>
                   )}
 
-                  {/* Message Bubble */}
                   <div
                     className={`max-w-[82%] break-words px-4 py-3 shadow-sm sm:max-w-[70%] ${
                       mine
@@ -396,9 +595,59 @@ export default function Chat() {
                         : "rounded-2xl rounded-bl-sm border border-gray-100 bg-white text-gray-800"
                     }`}
                   >
-                    <p className="whitespace-pre-wrap break-words text-sm leading-6 sm:text-[15px]">
-                      {message.text}
-                    </p>
+                    {/* Previously sent attachment */}
+                    {message.fileUrl && (
+                      <div className="mb-2">
+                        {imageFile ? (
+                          <a
+                            href={message.fileUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="block"
+                          >
+                            <img
+                              src={message.fileUrl}
+                              alt={message.fileName || "Shared image"}
+                              className="max-h-64 w-full rounded-xl object-contain"
+                            />
+                          </a>
+                        ) : (
+                          <a
+                            href={message.fileUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            download={message.fileName || undefined}
+                            className={`flex items-center gap-3 rounded-xl border p-3 ${
+                              mine
+                                ? "border-white/20 bg-white/10 hover:bg-white/20"
+                                : "border-gray-200 bg-gray-50 hover:bg-lime-50"
+                            }`}
+                          >
+                            <FileText size={25} className="shrink-0" />
+                            <div className="min-w-0">
+                              <p className="break-all text-sm font-semibold">
+                                {message.fileName || "Attachment"}
+                              </p>
+                              <p className="mt-1 text-xs opacity-75">
+                                {formatFileSize(message.fileSize)}
+                              </p>
+                            </div>
+                          </a>
+                        )}
+
+                        {message.fileName && imageFile && (
+                          <p className="mt-1 break-all text-xs opacity-80">
+                            {message.fileName}
+                          </p>
+                        )}
+                      </div>
+                    )}
+
+                    {message.text && (
+                      <p className="whitespace-pre-wrap break-words text-sm leading-6 sm:text-[15px]">
+                        {message.text}
+                      </p>
+                    )}
 
                     <p
                       className={`mt-1.5 text-right text-[10px] ${
@@ -414,7 +663,6 @@ export default function Chat() {
                     </p>
                   </div>
 
-                  {/* Current User Avatar */}
                   {mine && (
                     <div className="mb-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-emerald-100 text-xs font-bold text-emerald-800">
                       {(me?.Fullname || "Y").charAt(0).toUpperCase()}
@@ -427,59 +675,122 @@ export default function Chat() {
           <div ref={bottomRef} />
         </main>
 
-        {/* Message Input Area */}
+        {/* Message Composer */}
         <footer className="shrink-0 border-t border-lime-100 bg-white p-3 sm:p-5">
-          <form
-            onSubmit={sendMessage}
-            className="mx-auto flex max-w-4xl items-end gap-2 sm:gap-3"
-          >
-            <div className="flex min-w-0 flex-1 items-center rounded-2xl border border-gray-200 bg-gray-50 px-4 transition focus-within:border-lime-500 focus-within:bg-white focus-within:ring-4 focus-within:ring-lime-100">
-              <button type="button" className="p-2 rounded-full hover:bg-gray-100 hover:cursor-pointer" onClick={() => document.getElementById('fileInput').click()}>
-                <Plus size='24'/>
-              </button>
-              <input
-                value={text}
-                onChange={(event) => setText(event.target.value)}
-                placeholder="Type your message..."
-                maxLength={5000}
-                disabled={loading || !selected}
-                className="min-w-0 flex-1 bg-transparent py-3.5 text-sm text-gray-800 outline-none placeholder:text-gray-400 disabled:cursor-not-allowed sm:text-base"
-              />
+          <form onSubmit={sendMessage} className="mx-auto max-w-4xl">
+            {/* Pending attachment preview: still local, not uploaded */}
+            {selectedFile && (
+              <div className="mb-3 flex items-center gap-3 rounded-2xl border border-lime-200 bg-lime-50 p-3">
+                {filePreview ? (
+                  <img
+                    src={filePreview}
+                    alt="Selected attachment preview"
+                    className="h-16 w-16 shrink-0 rounded-xl border border-lime-100 object-cover"
+                  />
+                ) : (
+                  <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-xl bg-white text-lime-700">
+                    <FileText size={30} />
+                  </div>
+                )}
 
-              <span className="hidden pl-2 text-xs text-gray-400 sm:inline">
-                {text.length}/5000
-              </span>
-            </div>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-semibold text-gray-800">
+                    {selectedFile.name}
+                  </p>
+                  <p className="mt-1 text-xs text-gray-500">
+                    {formatFileSize(selectedFile.size)} · Ready to send
+                  </p>
+                  <p className="mt-1 text-xs text-lime-700">
+                    File has not been uploaded yet
+                  </p>
+                </div>
 
-            <button
-              type="submit"
-              disabled={
-                !text.trim() || !selected || loading || status !== "Connected"
-              }
-              aria-label="Send message"
-              className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-lime-600 text-white shadow-md shadow-lime-200 transition hover:bg-lime-700 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 sm:h-[52px] sm:w-auto sm:gap-2 sm:px-5 cursor-pointer"
-            >
-              <span className="hidden text-sm font-bold sm:inline">Send</span>
+                <button
+                  type="button"
+                  onClick={removeAttachment}
+                  disabled={sending}
+                  aria-label="Remove attachment"
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-gray-500 transition hover:bg-white hover:text-red-600 disabled:opacity-40"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+            )}
 
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                width="20"
-                height="20"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
+            {/* Hidden file input */}
+            <input
+              ref={fileInputRef}
+              id="fileInput"
+              type="file"
+              className="hidden"
+              onChange={handleFileChange}
+              disabled={loading || !selected || sending}
+            />
+
+            <div className="flex items-end gap-2 sm:gap-3">
+              <div className="flex min-w-0 flex-1 items-center rounded-2xl border border-gray-200 bg-gray-50 px-2 transition focus-within:border-lime-500 focus-within:bg-white focus-within:ring-4 focus-within:ring-lime-100 sm:px-3">
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={loading || !selected || sending}
+                  aria-label="Attach a file"
+                  title="Attach a file"
+                  className="flex h-10 w-10 shrink-0 cursor-pointer items-center justify-center rounded-full text-gray-600 transition hover:bg-lime-100 hover:text-lime-700 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <Plus size={24} />
+                </button>
+
+                <input
+                  value={text}
+                  onChange={(event) => setText(event.target.value)}
+                  placeholder="Type your message..."
+                  maxLength={5000}
+                  disabled={loading || !selected || sending}
+                  className="min-w-0 flex-1 bg-transparent py-3.5 text-sm text-gray-800 outline-none placeholder:text-gray-400 disabled:cursor-not-allowed sm:text-base"
+                />
+
+                <span className="hidden pl-2 text-xs text-gray-400 sm:inline">
+                  {text.length}/5000
+                </span>
+              </div>
+
+              <button
+                type="submit"
+                disabled={!canSend}
+                aria-label="Send message"
+                title="Send message"
+                className="flex h-12 w-12 shrink-0 cursor-pointer items-center justify-center rounded-2xl bg-lime-600 text-white shadow-md shadow-lime-200 transition hover:bg-lime-700 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 sm:h-[52px] sm:w-auto sm:gap-2 sm:px-5"
               >
-                <path d="m22 2-7 20-4-9-9-4Z" />
-                <path d="M22 2 11 13" />
-              </svg>
-            </button>
+                <span className="hidden text-sm font-bold sm:inline">
+                  {sending ? "Sending..." : "Send"}
+                </span>
+
+                {sending ? (
+                  <span className="h-5 w-5 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+                ) : (
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="20"
+                    height="20"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <path d="m22 2-7 20-4-9-9-4Z" />
+                    <path d="M22 2 11 13" />
+                  </svg>
+                )}
+              </button>
+            </div>
           </form>
 
           <p className="mt-3 text-center text-[10px] text-gray-400 sm:text-xs">
-            Send a message and keep the conversation going 💚
+            {selectedFile
+              ? "Your attachment will upload when you press Send 💚"
+              : "Send a message and keep the conversation going 💚"}
           </p>
         </footer>
       </div>
