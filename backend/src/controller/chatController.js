@@ -1,4 +1,5 @@
 const { prisma } = require("../config/db.js");
+const uploadCloudinaryFile = require('../utils/uploadCloudinaryFile.js')
 const getChatUsers = async (req, res) => {
   try {
     const currentUserId = Number(req.user.id);
@@ -135,6 +136,7 @@ const getMessages = async (req, res) => {
 };
 
 const uploadFile = async (req, res) => {
+  let uploadedFile;
   try {
     const currentUserId = Number(req.user.id);
     const otherUserId = Number(req.params.userId);
@@ -164,6 +166,9 @@ const uploadFile = async (req, res) => {
       console.log("receiver has not found!");
       return res.status(400).json({ message: "reciever not found!" });
     }
+    if(req.file){
+      uploadedFile = await uploadCloudinaryFile(req.file)
+    }
     const message = await prisma.message.create({
       data: {
         sender: {
@@ -173,10 +178,11 @@ const uploadFile = async (req, res) => {
           connect: { id: otherUserId },
         },
         text: req.body.text || null,
-        fileName: file.originalname,
-        fileUrl: `/uploads/${file.filename}`,
-        fileType: file.mimetype,
-        fileSize: file.size,
+        fileName: uploadedFile.originalname,
+        fileUrl: `/uploads/${uploadedFile.secure_url}`,
+        fileType: uploadedFile.mimetype,
+        fileSize: uploadedFile.size,
+        publicId: uploadedFile.publicId
       },
       select: {
         id: true,
@@ -187,6 +193,7 @@ const uploadFile = async (req, res) => {
         fileUrl: true,
         fileType: true,
         fileSize: true,
+        publicId: true,
         createdAt: true,
       },
     });

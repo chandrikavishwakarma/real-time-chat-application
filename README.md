@@ -12,9 +12,9 @@ A browser-based, one-to-one chat application for registering users, finding othe
 - Persist messages in PostgreSQL and identify each message's sender and receiver.
 - Validate message recipients and trimmed message text; messages must be 1–5,000 characters and cannot be sent to oneself.
 - Show the Socket.IO connection state in the chat view.
-- Upload file attachments through an authenticated backend API; frontend attachment integration is still pending.
+- An authenticated file-upload route and Cloudinary streaming helper are present in the backend, but the current upload flow has integration issues and is not yet a verified working feature.
 
-Group conversations, read receipts, typing indicators, live presence tracking, and message deletion/editing are **not implemented**. File uploads are implemented in the backend; sending and displaying attachments from the React frontend remains a next step.
+Group conversations, read receipts, typing indicators, live presence tracking, message deletion/editing, and frontend attachment selection/rendering are **not implemented**. Redis is not integrated.
 
 ## Current Development Progress
 
@@ -27,27 +27,24 @@ Group conversations, read receipts, typing indicators, live presence tracking, a
 - Socket.IO supports real-time text messaging between connected users.
 - Backend database connectivity and server startup are configured; the server connects to PostgreSQL before it begins listening.
 
-### File Upload Feature
+### File Upload Status
 
-- A backend API is implemented to send a file to another registered user.
-- Multer handles `multipart/form-data` uploads, and uploaded files are stored in the backend `uploads` directory.
-- The upload handler uses Prisma to save the original filename, file URL/path, MIME type, and file size in PostgreSQL.
-- File messages are associated with their sender and receiver through the message's database relations.
-- The upload route requires authentication and checks that the receiver exists.
-- When a file message is created, Socket.IO emits `new_message` to the sender's and receiver's user rooms.
-- The current upload route is `POST /api/chat/:userId/upload`; the uploaded file must use the multipart field name `file`. Files are served under the `/uploads` static route.
+The backend contains `POST /api/chat/:userId/upload`, protected by JWT middleware and `upload.single("file")`. Multer uses **memory storage**, so the incoming file is held in memory rather than saved to a local `uploads` directory. The Cloudinary helper calls `cloudinary.uploader.upload_stream()` with the `uploaded_files` folder and `resource_type: "auto"`.
+
+This path is present but is **not yet reliably functional**: the controller maps Multer fields such as `originalname`, `mimetype`, and `size` from the Cloudinary response instead of the original Multer file, constructs `fileUrl` by prefixing `/uploads/` to Cloudinary's secure URL, and expects `publicId` rather than Cloudinary's `public_id`. The schema also requires `Message.text`, while the handler sends `null` when the multipart `text` field is omitted. In addition, the server does not attach its Socket.IO instance to the Express app, although the handler looks it up there before emitting `new_message`.
+
+The route currently accepts `file` and reads optional `text` from multipart form data; due to the required database `text` field, include non-empty text to satisfy the current schema. No Multer file-size or file-type filter is configured, and the code does not establish a guaranteed list of supported file types. Attachment messages are not returned with their metadata by the message-history query, and the React chat page does not provide upload controls or render attachments.
 
 ### Current Status
 
-Backend integration with PostgreSQL and Prisma is configured, and the file upload backend implementation is in place. File upload behavior and database persistence still need thorough testing; the frontend does not yet provide file-upload or attachment-display functionality.
+Text chat, authentication, and PostgreSQL/Prisma persistence are implemented. The upload route and Cloudinary helper are present but need the integration issues above addressed and tested before file upload can be considered complete. The frontend does not yet provide file-upload or attachment-display functionality.
 
 ### Next Steps
 
-- Test file uploads and database persistence thoroughly.
-- Verify uploaded file access through the backend static file route.
-- Integrate file upload functionality into the React frontend.
-- Display file attachments in chat conversations.
-- Test real-time delivery of text and file messages between users.
+- Correct the Cloudinary response-to-Prisma metadata mapping, URL/public ID handling, and required message text behavior.
+- Configure and verify Cloudinary credentials and make the Socket.IO instance available to the upload controller if file-message broadcasts are intended.
+- Include file metadata in conversation history and build frontend file-upload and attachment-display functionality.
+- Test file storage, database persistence, and real-time file-message delivery end to end.
 
 ## Technology Stack
 
@@ -68,6 +65,7 @@ The backend package still lists `mongoose`, and `backend/src/model/` contains Mo
 ├── README.md
 ├── backend/
 │   ├── package.json                 # Backend dependencies and dev script
+│   ├── package-lock.json
 │   ├── prisma.config.ts             # Prisma schema, migration, and datasource configuration
 │   ├── server.js                    # Express HTTP server, Socket.IO, and startup
 │   ├── prisma/
@@ -76,19 +74,22 @@ The backend package still lists `mongoose`, and `backend/src/model/` contains Mo
 │   │       ├── migration_lock.toml
 │   │       ├── 20261023095501_init/
 │   │       │   └── migration.sql    # Initial PostgreSQL schema migration
-│   │       └── 20261026122220_file_upload/
-│   │           └── migration.sql    # File metadata columns for messages
+│   │       ├── 20261026122220_file_upload/
+│   │       │   └── migration.sql    # File metadata columns for messages
+│   │       └── 20261028050602_cloudinary_file_publicid/
+│   │           └── migration.sql    # Cloudinary publicId column
 │   ├── src/
 │       ├── app.js                   # Express middleware and API route mounting
 │       ├── config/
+│       │   ├── cloudinary.js        # Cloudinary SDK configuration
 │       │   └── db.js                # Prisma Client and PostgreSQL connection
 │       ├── controller/
-│       │   ├── authController.js   # Registration and login
-│       │   ├── chatController.js   # Conversation users and message history
-│       │   └── userController.js   # Public user-list endpoint
+│       │   ├── authController.js    # Registration and login
+│       │   ├── chatController.js    # Conversation users, history, and upload handler
+│       │   └── userController.js    # Public user-list endpoint
 │       ├── middleware/
-│       │   ├── authMiddleware.js   # JWT authentication for protected HTTP routes
-│       │   └── uploadMiddleware.js # Multer disk storage for uploaded files
+│       │   ├── authMiddleware.js    # JWT authentication for protected HTTP routes
+│       │   └── uploadMiddleware.js  # Multer memory storage
 │       ├── model/
 │       │   ├── Message.js          # Legacy Mongoose model; not used by current chat flow
 │       │   └── User.js             # Legacy Mongoose model; not used by current chat flow
@@ -96,17 +97,28 @@ The backend package still lists `mongoose`, and `backend/src/model/` contains Mo
 │       │   ├── authRoute.js
 │       │   ├── chatRoutes.js       # Chat APIs, including file uploads
 │       │   └── userRoutes.js
-│       └── socket/
-│           └── chatSocket.js       # Socket authentication, user rooms, and message handling
-│   └── uploads/                    # Files uploaded through the backend API
+│       ├── socket/
+│       │   └── chatSocket.js       # Socket authentication, user rooms, and message handling
+│       └── utils/
+│           └── uploadCloudinaryFile.js # Cloudinary upload_stream helper
 └── frontend/
     ├── package.json                 # Frontend dependencies and Vite scripts
+    ├── package-lock.json
+    ├── README.md                    # Vite template documentation
+    ├── eslint.config.js
     ├── vite.config.js               # React and Tailwind Vite plugins
     ├── index.html
+    ├── public/
+    │   ├── favicon.svg
+    │   └── icons.svg
     └── src/
         ├── App.jsx                  # Routes: /, /login, /register, /chat/:userId
         ├── main.jsx                 # React entry point
         ├── index.css
+        ├── assets/
+        │   ├── hero.png
+        │   ├── react.svg
+        │   └── vite.svg
         └── pages/
             ├── Home.jsx             # Current user, user list, and logout
             ├── Login.jsx
@@ -136,15 +148,16 @@ The Prisma schema is in `backend/prisma/schema.prisma`. It uses the PostgreSQL p
 | `receiverId` | `Int` | Foreign key to `User.id` for the recipient |
 | `text` | `String` | Required message text, limited to 5,000 characters |
 | `fileName` | `String?` | Original filename for an attachment, when present |
-| `fileUrl` | `String?` | Backend path used to access an uploaded attachment |
+| `fileUrl` | `String?` | Intended file URL; nullable |
 | `fileType` | `String?` | Attachment MIME type, when present |
 | `fileSize` | `Int?` | Attachment size in bytes, when present |
+| `publicId` | `String?` | Cloudinary public ID, when present |
 | `createdAt` | `DateTime` | Defaults to the time the message is created |
 | `updatedAt` | `DateTime` | Maintained by Prisma on updates |
 
 Each message has two separate relations to `User`: `sender` (`SentMessages`) and `receiver` (`ReceivedMessages`). Both foreign keys reference `User.id` and cascade on user deletion. A user can therefore have sent and received messages. The database tables are named `"User"` and `"Message"` (case-sensitive when quoted in PostgreSQL).
 
-The schema defines a unique index on `User.Email` and a composite index on `Message(senderId, receiverId, createdAt)`. The initial migration creates those indexes and the two message foreign-key constraints; the file-upload migration adds the attachment metadata columns.
+The schema defines a unique index on `User.Email` and a composite index on `Message(senderId, receiverId, createdAt)`. The migrations create the tables and indexes, add the optional file metadata columns, and then add `publicId`. The schema requires `text` for every message, including file messages.
 
 ## Application Workflow
 
@@ -164,13 +177,14 @@ REST authorization verifies the Bearer JWT but does not look up the user on ever
 
 The Express application mounts routes under `/api/auth`, `/api/users`, and `/api/chat`.
 
-The authenticated file upload endpoint is `POST /api/chat/:userId/upload`. Send the file as multipart field `file`. Uploaded files are served from the backend's `/uploads` static route. The upload handler creates a related message record and emits `new_message` to both participants' user rooms. The frontend does not yet include file-upload controls or attachment rendering.
+The upload route is present but has the incomplete behavior described in [File Upload Status](#file-upload-status). It uses multipart form data and attempts to save a message; do not rely on the current upload response, message-history attachment data, or file broadcast until those gaps are fixed.
 
 | Method | Endpoint | Authentication | Purpose |
 | --- | --- | --- | --- |
 | `POST` | `/api/auth/register` | None | Create an account. |
 | `POST` | `/api/auth/login` | None | Verify credentials and return a JWT and basic user details. |
 | `GET` | `/api/users` | None | Return a `users` array containing user IDs, full names, and email addresses. This route is not used by the current frontend flow. |
+| `POST` | `/api/chat/:userId/upload` | Bearer token | Accept multipart `file` and optional message `text`; upload handling is incomplete (see above). |
 | `GET` | `/api/chat/users` | Bearer JWT | Return `me` and the other registered users. |
 | `GET` | `/api/chat/:userId/messages` | Bearer JWT | Return messages exchanged with the selected user, oldest first. |
 
@@ -194,6 +208,12 @@ Authorization: Bearer <JWT>
 
 On success, the API responds with HTTP `201` and a message. Registration does not return a JWT; log in separately.
 
+```json
+{
+  "message": "User registered!"
+}
+```
+
 ### Login
 
 `POST /api/auth/login`
@@ -206,6 +226,18 @@ On success, the API responds with HTTP `201` and a message. Registration does no
 ```
 
 On success, the response includes a one-day `token` and a `user` object with `_id`, `Fullname`, and `Email`.
+
+```json
+{
+  "message": "Login successful!",
+  "token": "<JWT>",
+  "user": {
+    "_id": 1,
+    "Fullname": "Alex Example",
+    "Email": "alex@example.com"
+  }
+}
+```
 
 ### Chat user list
 
@@ -226,9 +258,36 @@ The example IDs and account details are illustrative only.
 
 ### Conversation history
 
-`GET /api/chat/:userId/messages` returns an array of persisted Prisma message records with `id`, `senderId`, `receiverId`, `text`, `createdAt`, and `updatedAt`. The endpoint rejects invalid IDs and self-chat requests, and returns `404` when the other user is not found.
+`GET /api/chat/:userId/messages` queries the PostgreSQL database through Prisma and returns an array of persisted message records with `id`, `senderId`, `receiverId`, `text`, and `createdAt`. It does not currently select file metadata or `updatedAt`. The endpoint rejects invalid IDs and self-chat requests, and returns `404` when the other user is not found.
+
+```json
+[
+  {
+    "id": 123,
+    "senderId": 1,
+    "receiverId": 2,
+    "text": "Hello!",
+    "createdAt": "2026-10-23T10:00:00.000Z"
+  }
+]
+```
 
 Handled API errors are JSON responses with a `message` field. Missing, invalid, and expired JWTs on protected routes return HTTP `401`.
+
+Protected HTTP routes require `Authorization: Bearer <JWT>`. The token is returned by login and expires after one day.
+
+### Upload a file
+
+`POST /api/chat/:userId/upload` requires a Bearer token and `multipart/form-data`. `userId` is the recipient's numeric user ID. Include `file` as the uploaded file and, because `Message.text` is required by the schema, include a non-empty `text` field as well.
+
+```bash
+curl -X POST "http://localhost:5000/api/chat/2/upload" \
+  -H "Authorization: Bearer <JWT>" \
+  -F "file=@./path/to/file" \
+  -F "text=Please see this file"
+```
+
+The handler's intended success response is HTTP `201` with `{ "message": "file uploaded!", "file": { ... } }`. The stored record select includes `id`, `senderId`, `receiverId`, `text`, `fileName`, `fileUrl`, `fileType`, `fileSize`, `publicId`, and `createdAt`. Because the Cloudinary response fields are currently mapped incorrectly, the URL and metadata should not be assumed valid until the implementation is corrected.
 
 ## Socket.IO
 
@@ -264,6 +323,8 @@ The `send_message` acknowledgement is:
 ```
 
 On failure, the acknowledgement has `{ "success": false, "message": "<reason>" }`. The handler reports invalid recipients, missing recipients, blank/oversized messages, and send failures this way. If a callback is omitted, the server uses a no-op callback; the message event can still be processed.
+
+The upload controller also attempts to emit `new_message`, but its payload uses Prisma field names (`id`, `senderId`, and `receiverId`) rather than the text-message socket payload (`_id`, `sender`, and `receiver`). The current server does not set the Socket.IO instance on `req.app`, so the upload handler cannot obtain it through its current `req.app.get("io")` lookup. File broadcasts therefore should be treated as incomplete.
 
 ## Prerequisites
 
@@ -355,6 +416,16 @@ PORT=5000
 
 `DATABASE_URL` is required by Prisma. Replace the example user, password, host, and database with values for your PostgreSQL setup. `JWT_SECRET` is required for signing and verifying tokens. `PORT` is optional; the backend defaults to `5000`.
 
+The Cloudinary configuration currently reads these names:
+
+```dotenv
+CLOUD_NAME=your-cloudinary-cloud-name
+CLOUDINARY_API_KEY=your-cloudinary-api-key
+CLOUDINARY_SECRET=your-cloudinary-api-secret
+```
+
+These are the names in the current source; it does not read `CLOUDINARY_CLOUD_NAME` or `CLOUDINARY_API_SECRET`. The config also passes the secret using `secret_key`, so verify/correct the Cloudinary SDK configuration before relying on uploads. Cloudinary values are only needed for the unfinished upload path.
+
 ### `frontend/.env`
 
 ```dotenv
@@ -364,6 +435,8 @@ VITE_API_URL=http://localhost:5000
 `VITE_API_URL` is used by the home and chat pages for HTTP requests and Socket.IO, with `http://localhost:5000` as a fallback. The login and registration pages currently use `http://localhost:5000` directly, so changing this variable alone does not change their API URL. Socket.IO's allowed origin is also hardcoded to `http://localhost:5173` in `backend/server.js`.
 
 These are safe example values only. Keep actual database passwords and JWT secrets private; do not copy secrets into the README or commit local `.env` files.
+
+Create `.env` files locally and make sure they are excluded from Git commits. Never add real database credentials, JWT secrets, or Cloudinary keys to this README or to source control.
 
 ## Running and Trying the Application
 
