@@ -1,5 +1,6 @@
 const { prisma } = require("../config/db.js");
 const uploadCloudinaryFile = require('../utils/uploadCloudinaryFile.js')
+const {getConversationMessages} = require('../service/messageCache.js')
 const getChatUsers = async (req, res) => {
   try {
     const currentUserId = Number(req.user.id);
@@ -90,45 +91,12 @@ const getMessages = async (req, res) => {
         message: "User not found",
       });
     }
-
-    // console.log(
-    //   "Fetching messages between users:",
-    //   currentUserId,
-    //   otherUserId
-    // );
-
-    // Fetch messages in both directions
-    const messages = await prisma.message.findMany({
-      where: {
-        OR: [
-          {
-            senderId: currentUserId,
-            receiverId: otherUserId,
-          },
-          {
-            senderId: otherUserId,
-            receiverId: currentUserId,
-          },
-        ],
-      },
-      select: {
-        id: true,
-        senderId: true,
-        receiverId: true,
-        text: true,
-        fileName: true,
-        fileType: true,
-        fileUrl: true,
-        fileSize: true,
-        createdAt: true,
-      },
-      orderBy: {
-        createdAt: "asc",
-      },
-    });
-
-    // console.log("Messages retrieved successfully:", messages);
-
+    //used below function from services provider
+    const messages = await getConversationMessages(
+      currentUserId,
+      otherUserId
+    )
+    
     return res.status(200).json(messages);
   } catch (error) {
     console.error("getMessages error:", error);

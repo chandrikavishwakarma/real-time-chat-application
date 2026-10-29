@@ -1,7 +1,6 @@
-
 const jwt = require("jsonwebtoken");
 const { prisma } = require("../config/db.js");
-
+const { invalidateConversationCache } = require("../service/messageCache.js");
 function chatSocket(io) {
   io.use(async (socket, next) => {
     try {
@@ -75,6 +74,7 @@ function chatSocket(io) {
           });
         }
 
+        // 1. Save the message in PostgreSQL
         const message = await prisma.message.create({
           data: {
             senderId: Number(socket.userId),
@@ -83,6 +83,10 @@ function chatSocket(io) {
           },
         });
 
+        // 2. Invalidate the conversation's Redis cache
+        await invalidateConversationCache(Number(socket.userId), receiver.id);
+
+        // 3. Prepare the message for Socket.IO clients
         const payload = {
           _id: String(message.id),
           sender: String(message.senderId),
@@ -91,13 +95,16 @@ function chatSocket(io) {
           createdAt: message.createdAt,
         };
 
+        // 4. Deliver to both users
         io.to(`user:${socket.userId}`)
           .to(`user:${String(receiver.id)}`)
           .emit("new_message", payload);
 
+        // 5. Confirm successful sending
         reply({ success: true, message: payload });
       } catch (error) {
         console.error("Socket message error:", error);
+
         reply({
           success: false,
           message: "Unable to send message",
@@ -111,4 +118,4 @@ function chatSocket(io) {
   });
 }
 
-module.exports = chatSocket
+module.exports = chatSocket;
