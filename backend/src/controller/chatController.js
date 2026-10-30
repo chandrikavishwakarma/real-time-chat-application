@@ -1,6 +1,6 @@
 const { prisma } = require("../config/db.js");
-const uploadCloudinaryFile = require('../utils/uploadCloudinaryFile.js')
-const {getConversationMessages} = require('../service/messageCache.js')
+const uploadCloudinaryFile = require("../utils/uploadCloudinaryFile.js");
+const { getConversationMessages } = require("../service/messageCache.js");
 const getChatUsers = async (req, res) => {
   try {
     const currentUserId = Number(req.user.id);
@@ -16,7 +16,7 @@ const getChatUsers = async (req, res) => {
 
     if (!me) {
       return res.status(404).json({
-        message: "User not found",
+        message: "User not found!",
       });
     }
 
@@ -45,7 +45,6 @@ const getChatUsers = async (req, res) => {
     });
   } catch (error) {
     console.error("getChatUsers error:", error);
-
     return res.status(500).json({
       message: "Failed to load users",
     });
@@ -64,7 +63,7 @@ const getMessages = async (req, res) => {
       !Number.isSafeInteger(otherUserId) ||
       otherUserId <= 0
     ) {
-      return res.status(400).json({
+      return res.status(401).json({
         message: "Invalid user ID",
       });
     }
@@ -92,11 +91,8 @@ const getMessages = async (req, res) => {
       });
     }
     //used below function from services provider
-    const messages = await getConversationMessages(
-      currentUserId,
-      otherUserId
-    )
-    
+    const messages = await getConversationMessages(currentUserId, otherUserId);
+
     return res.status(200).json(messages);
   } catch (error) {
     console.error("getMessages error:", error);
@@ -138,13 +134,10 @@ const uploadFile = async (req, res) => {
       console.log("receiver has not found!");
       return res.status(400).json({ message: "reciever not found!" });
     }
-    if(req.file){
-      uploadedFile = await uploadCloudinaryFile(req.file)
+    if (req.file) {
+      uploadedFile = await uploadCloudinaryFile(req.file);
     }
-    // console.log(uploadFile)
-    console.log("Request body:", req.body);
-console.log("Message text:", req.body?.text);
-console.log("Uploaded file:", uploadedFile);
+   
     const message = await prisma.message.create({
       data: {
         sender: {
@@ -153,12 +146,12 @@ console.log("Uploaded file:", uploadedFile);
         receiver: {
           connect: { id: otherUserId },
         },
-        text:  req.body?.text?.trim() || "",
+        text: req.body?.text?.trim() || "",
         fileName: file.originalname,
-        fileUrl:  uploadedFile.secure_url,
+        fileUrl: uploadedFile.secure_url,
         fileType: file.mimetype,
         fileSize: file.size,
-        publicId: uploadedFile.public_id
+        publicId: uploadedFile.public_id,
       },
       select: {
         id: true,
@@ -183,7 +176,7 @@ console.log("Uploaded file:", uploadedFile);
   } catch (err) {
     console.error("upload file error:", err);
     return res.status(500).json({
-      message: "failed to upload the file!",
+      message: "Internal server error",
       error: err.message,
     });
   }

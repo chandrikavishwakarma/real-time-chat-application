@@ -7,7 +7,6 @@ const http = require("http");
 const chatSocket = require("./src/socket/chatSocket.js");
 const redisClient = require("./src/config/redis.js")
 const server = http.createServer(app);
-
 const io = new Server(server, {
   cors: {
     origin: "http://localhost:5173",

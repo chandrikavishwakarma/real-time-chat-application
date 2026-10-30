@@ -8,7 +8,7 @@ const register = async (req, res) => {
 
     if (!Fullname || !Email || !Password) {
       return res.status(400).json({
-        message: "All fields are required!",
+        message: "Required fields are missing or invalid!",
       });
     }
 
@@ -17,7 +17,7 @@ const register = async (req, res) => {
     });
 
     if (findUser) {
-      return res.status(400).json({
+      return res.status(409).json({
         message: "User already exists!",
       });
     }
@@ -33,19 +33,19 @@ const register = async (req, res) => {
     });
 
     return res.status(201).json({
-      message: "User registered!",
+      message: "User registered successfully!",
     });
   } catch (err) {
     console.error(err);
 
     if (err.code === "P2002") {
-      return res.status(400).json({
+      return res.status(409).json({
         message: "User already exists!",
       });
     }
 
     return res.status(500).json({
-      message: "There is a server error!",
+      message: "Internal server error!",
     });
   }
 };
@@ -66,7 +66,7 @@ const login = async (req, res) => {
 
     if (!isUserExists) {
       return res.status(400).json({
-        message: "User doesn't exist!",
+        message: "User not exist, please register first!",
       });
     }
 
@@ -76,8 +76,8 @@ const login = async (req, res) => {
     );
 
     if (!isPasswordMatch) {
-      return res.status(400).json({
-        message: "Current password is incorrect!",
+      return res.status(401).json({
+        message: "Email Address or Password incorrect!",
       });
     }
 
